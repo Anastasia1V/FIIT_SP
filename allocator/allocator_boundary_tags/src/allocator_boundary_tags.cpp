@@ -140,23 +140,19 @@ static void merge_blocks(void *allocator, unsigned char *block)
     while (true) {
         bool merged = false;
         unsigned char *previous = nullptr;
-        for (unsigned char *current = begin; current < end;) {
-            size_t current_size = *reinterpret_cast<const size_t *>(current) & ~OCCUPIED_BIT;
-            unsigned char *next = current + current_size;
-            if (next == block) {
-                previous = current;
-                break;
+        if (block > begin) {
+            size_t prev_size = *reinterpret_cast<size_t *>(block - sizeof(size_t)) & ~OCCUPIED_BIT;
+            previous = block - prev_size;
+            if (previous < begin || previous >= block) {
+                previous = nullptr;
             }
-            if (next <= current || next > end) {
-                break;
-            }
-            current = next;
         }
-        if (previous != nullptr && (*reinterpret_cast<const size_t *>(previous) & OCCUPIED_BIT) == 0 &&
-            previous + (*reinterpret_cast<const size_t *>(previous) & ~OCCUPIED_BIT) == block) {
-            size_t new_size = (*reinterpret_cast<const size_t *>(previous) & ~OCCUPIED_BIT) +
-                (*reinterpret_cast<const size_t *>(block) & ~OCCUPIED_BIT);
+        if (previous != nullptr &&
+            (*reinterpret_cast<const size_t *>(previous) & OCCUPIED_BIT) == 0) {
+            size_t new_size = (*reinterpret_cast<size_t *>(previous) & ~OCCUPIED_BIT) +
+                (*reinterpret_cast<size_t *>(block) & ~OCCUPIED_BIT);
             *reinterpret_cast<size_t *>(previous) = new_size;
+            *reinterpret_cast<size_t *>(previous + new_size - sizeof(size_t)) = new_size;
             block = previous;
             merged = true;
         }
@@ -170,6 +166,7 @@ static void merge_blocks(void *allocator, unsigned char *block)
             block + block_size == next_block) {
             size_t new_size = block_size + (*reinterpret_cast<const size_t *>(next_block) & ~OCCUPIED_BIT);
             *reinterpret_cast<size_t *>(block) = new_size;
+            *reinterpret_cast<size_t *>(block + new_size - sizeof(size_t)) = new_size;
             merged = true;
         }
         if (!merged) {
@@ -260,6 +257,7 @@ allocator_boundary_tags::allocator_boundary_tags(
         unsigned char *first = memory_ptr + data_offset;
         *reinterpret_cast<void **>(memory_ptr + head_offset) = first;
         *reinterpret_cast<size_t *>(first) = space_size;
+        *reinterpret_cast<size_t *>(first + space_size - sizeof(size_t)) = space_size;
         *reinterpret_cast<void **>(first + sizeof(size_t)) = nullptr;
         *reinterpret_cast<void **>(first + sizeof(size_t) + sizeof(void *)) = nullptr;
         *reinterpret_cast<void **>(first + sizeof(size_t) + sizeof(void *) * 2) = nullptr;
@@ -339,10 +337,12 @@ allocator_boundary_tags::allocator_boundary_tags(
         void *best_next = *reinterpret_cast<void *const *>(block_ptr + sizeof(size_t) + sizeof(void *));
         size_t size_with_bit = total_size | OCCUPIED_BIT;
         *reinterpret_cast<size_t *>(block_ptr) = size_with_bit;
+        *reinterpret_cast<size_t *>(block_ptr + total_size - sizeof(size_t)) = size_with_bit;
         *reinterpret_cast<void **>(block_ptr + sizeof(size_t)) = nullptr;
         *reinterpret_cast<void **>(block_ptr + sizeof(size_t) + sizeof(void *)) = nullptr;
         *reinterpret_cast<void **>(block_ptr + sizeof(size_t) + sizeof(void *) * 2) = nullptr;
         *reinterpret_cast<size_t *>(remain_block) = remain;
+        *reinterpret_cast<size_t *>(remain_block + remain - sizeof(size_t)) = remain;
         *reinterpret_cast<void **>(remain_block + sizeof(size_t)) = previous_ptr;
         *reinterpret_cast<void **>(remain_block + sizeof(size_t) + sizeof(void *)) = best_next;
         *reinterpret_cast<void **>(remain_block + sizeof(size_t) + sizeof(void *) * 2) = nullptr;
@@ -357,6 +357,7 @@ allocator_boundary_tags::allocator_boundary_tags(
     } else {
         size_t size_with_bit = block_size | OCCUPIED_BIT;
         *reinterpret_cast<size_t *>(block_ptr) = size_with_bit;
+        *reinterpret_cast<size_t *>(block_ptr + block_size - sizeof(size_t)) = size_with_bit;
         void *next = *reinterpret_cast<void *const *>(block_ptr + sizeof(size_t) + sizeof(void *));
         if (previous_ptr == nullptr) {
             *reinterpret_cast<void **>(memory_ptr + head_offset) = next;
@@ -412,7 +413,9 @@ void allocator_boundary_tags::do_deallocate_sm(
     if ((*reinterpret_cast<const size_t *>(metadata_ptr) & OCCUPIED_BIT) == 0) {
         throw std::invalid_argument("Память уже освобождена");
     }
-    *reinterpret_cast<size_t *>(metadata_ptr) = *reinterpret_cast<size_t *>(metadata_ptr) & ~OCCUPIED_BIT;
+    size_t size = *reinterpret_cast<size_t *>(metadata_ptr) & ~OCCUPIED_BIT;
+    *reinterpret_cast<size_t *>(metadata_ptr) = size;
+    *reinterpret_cast<size_t *>(metadata_ptr + size - sizeof(size_t)) = size;
     merge_blocks(_trusted_memory, metadata_ptr);
 }
 
